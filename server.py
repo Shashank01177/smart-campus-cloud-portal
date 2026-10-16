@@ -778,11 +778,68 @@ def ai_sql_translate():
     p = prompt.lower()
     sql = None
     
+    # Second / Nth highest salary
+    if "second highest" in p or "2nd highest" in p:
+        sql = """SELECT faculty_id, first_name || ' ' || last_name AS faculty_name,
+       designation, salary, department_id
+FROM faculty
+ORDER BY salary DESC
+OFFSET 1 LIMIT 1;"""
+
+    # Third highest salary
+    elif "third highest" in p or "3rd highest" in p:
+        sql = """SELECT faculty_id, first_name || ' ' || last_name AS faculty_name,
+       designation, salary, department_id
+FROM faculty
+ORDER BY salary DESC
+OFFSET 2 LIMIT 1;"""
+
+    # Highest salary
+    elif "highest salary" in p or "max salary" in p or "maximum salary" in p:
+        sql = """SELECT faculty_id, first_name || ' ' || last_name AS faculty_name,
+       designation, salary, department_id
+FROM faculty
+ORDER BY salary DESC
+LIMIT 1;"""
+
+    # Lowest salary
+    elif "lowest salary" in p or "min salary" in p or "minimum salary" in p:
+        sql = """SELECT faculty_id, first_name || ' ' || last_name AS faculty_name,
+       designation, salary, department_id
+FROM faculty
+ORDER BY salary ASC
+LIMIT 1;"""
+
+    # Only one student
+    elif "only one student" in p or "1 student" in p or "one student" in p:
+        if "department" in p:
+            sql = """SELECT d.department_name, COUNT(s.student_id) AS student_count
+FROM department d
+JOIN student s ON d.department_id = s.department_id
+GROUP BY d.department_id, d.department_name
+HAVING COUNT(s.student_id) = 1;"""
+        elif "faculty" in p:
+            sql = """SELECT f.first_name || ' ' || f.last_name AS faculty_name,
+       c.course_name, COUNT(sce.student_id) AS student_count
+FROM faculty f
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+JOIN course c ON fc.course_id = c.course_id
+JOIN student_course_enrollment sce ON c.course_id = sce.course_id
+GROUP BY f.faculty_id, f.first_name, f.last_name, c.course_name
+HAVING COUNT(sce.student_id) = 1;"""
+        else:
+            sql = """SELECT c.course_code, c.course_name, COUNT(sce.student_id) AS enrolled_students
+FROM course c
+JOIN student_course_enrollment sce ON c.course_id = sce.course_id
+GROUP BY c.course_id, c.course_code, c.course_name
+HAVING COUNT(sce.student_id) = 1;"""
+
     # 1. faculty > X courses
-    m = re.search(r"faculty\s*(>|<|>=|<=|=)\s*(\d+)\s*(?:courses?|subjects?)?", p)
-    if m and ("course" in p or "subject" in p or ("student" not in p and m.group(2))):
-        op, num = m.group(1), m.group(2)
-        sql = f"""SELECT f.faculty_id, f.first_name || ' ' || f.last_name AS faculty_name,
+    if not sql:
+        m = re.search(r"faculty\s*(>|<|>=|<=|=)\s*(\d+)\s*(?:courses?|subjects?)?", p)
+        if m and ("course" in p or "subject" in p or ("student" not in p and m.group(2))):
+            op, num = m.group(1), m.group(2)
+            sql = f"""SELECT f.faculty_id, f.first_name || ' ' || f.last_name AS faculty_name,
        f.designation, d.department_name,
        COUNT(fc.course_id) AS total_courses_taught
 FROM faculty f
