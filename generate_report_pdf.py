@@ -484,7 +484,7 @@ ORDER BY total_faculty DESC;"""
     story.append(Spacer(1, 8))
 
     story.append(Paragraph(
-        "<b>5.2 System Architecture & Deployment UML Diagram:</b> Visualizing presentation, application compute, persistence, and DevOps telemetry layers on Microsoft Azure Cloud.",
+        "<b>5.2 UML Class Diagram (Academic Object-Oriented Domain Model):</b> Visualizing entity class hierarchies (User generalization to Student, Faculty, Admin), relational associations, attributes with PK/FK types, cardinalities, and domain methods.",
         body_style
     ))
 
