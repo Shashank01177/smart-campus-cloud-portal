@@ -1,0 +1,14 @@
+# Local viva notes & master questions (kept local for personal prep)
+database/viva_queries_master.sql
+generate_diagrams.py
+
+# Python & Environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+.DS_Store
+Thumbs.db
