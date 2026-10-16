@@ -764,6 +764,135 @@ def sql_console():
     except Exception as ex:
         return err(str(ex))
 
+# ════════════════════════════════════════════════════════════
+# AI INLINE SQL COMMANDER
+# ════════════════════════════════════════════════════════════
+@app.route("/api/ai/sql-translate", methods=["POST"])
+def ai_sql_translate():
+    import re
+    data = request.get_json() or {}
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return err("Prompt is empty")
+    
+    p = prompt.lower()
+    sql = None
+    
+    # 1. faculty > X courses
+    m = re.search(r"faculty\s*(>|<|>=|<=|=)\s*(\d+)\s*(?:courses?|subjects?)?", p)
+    if m and ("course" in p or "subject" in p or ("student" not in p and m.group(2))):
+        op, num = m.group(1), m.group(2)
+        sql = f"""SELECT f.faculty_id, f.first_name || ' ' || f.last_name AS faculty_name,
+       f.designation, d.department_name,
+       COUNT(fc.course_id) AS total_courses_taught
+FROM faculty f
+JOIN department d ON f.department_id = d.department_id
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+GROUP BY f.faculty_id, f.first_name, f.last_name, f.designation, d.department_name
+HAVING COUNT(fc.course_id) {op} {num}
+ORDER BY total_courses_taught DESC;"""
+
+    # 2. faculty > X students
+    if not sql or "student" in p:
+        m = re.search(r"faculty\s*(>|<|>=|<=|=)\s*(\d+)\s*students?", p)
+        if m:
+            op, num = m.group(1), m.group(2)
+            sql = f"""SELECT f.faculty_id, f.first_name || ' ' || f.last_name AS faculty_name,
+       f.designation, d.department_name,
+       COUNT(DISTINCT sce.student_id) AS total_students_taught
+FROM faculty f
+JOIN department d ON f.department_id = d.department_id
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+JOIN student_course_enrollment sce ON fc.course_id = sce.course_id
+GROUP BY f.faculty_id, f.first_name, f.last_name, f.designation, d.department_name
+HAVING COUNT(DISTINCT sce.student_id) {op} {num}
+ORDER BY total_students_taught DESC;"""
+
+    # 3. students cgpa > X
+    if not sql:
+        m = re.search(r"(?:students?.*)?cgpa\s*(>|<|>=|<=|=)\s*(\d+(?:\.\d+)?)", p) or re.search(r"students?\s*(>|<|>=|<=|=)\s*(\d+(?:\.\d+)?)\s*cgpa", p)
+        if m:
+            op, val = m.group(1), m.group(2)
+            sql = f"""SELECT roll_number, first_name || ' ' || last_name AS student_name,
+       current_semester, cgpa, status
+FROM student
+WHERE cgpa {op} {val} AND status = 'Active'
+ORDER BY cgpa DESC;"""
+
+    # 4. attendance < X
+    if not sql:
+        m = re.search(r"attendance\s*(>|<|>=|<=|=)\s*(\d+)%?", p)
+        if m:
+            op, val = m.group(1), m.group(2)
+            sql = f"""SELECT s.roll_number, s.first_name || ' ' || s.last_name AS student_name,
+       c.course_code, c.course_name,
+       COUNT(a.attendance_id) AS total_lectures,
+       SUM(CASE WHEN a.status IN ('Present', 'On Duty') THEN 1 ELSE 0 END) AS attended_lectures,
+       ROUND(100.0 * SUM(CASE WHEN a.status IN ('Present', 'On Duty') THEN 1 ELSE 0 END) / COUNT(a.attendance_id), 2) AS attendance_pct
+FROM student s
+JOIN attendance a ON s.student_id = a.student_id
+JOIN course c ON a.course_id = c.course_id
+GROUP BY s.student_id, s.roll_number, s.first_name, s.last_name, c.course_code, c.course_name
+HAVING (100.0 * SUM(CASE WHEN a.status IN ('Present', 'On Duty') THEN 1 ELSE 0 END) / COUNT(a.attendance_id)) {op} {val}
+ORDER BY attendance_pct ASC;"""
+
+    # 5. fee pending > X
+    if not sql:
+        m = re.search(r"fee(?:s)?.*?(>|<|>=|<=|=)\s*(\d+)", p)
+        if m:
+            op, val = m.group(1), m.group(2)
+            sql = f"""SELECT s.roll_number, s.first_name || ' ' || s.last_name AS student_name,
+       d.department_name, SUM(f.amount) AS total_pending_due
+FROM student s
+JOIN department d ON s.department_id = d.department_id
+JOIN fee f ON s.student_id = f.student_id
+WHERE f.payment_status IN ('Pending', 'Overdue')
+GROUP BY s.roll_number, student_name, d.department_name
+HAVING SUM(f.amount) {op} {val}
+ORDER BY total_pending_due DESC;"""
+
+    # 6. faculty courses list
+    if not sql and ("faculty" in p and ("courses" in p or "subjects" in p or "teaching" in p)):
+        sql = """SELECT f.first_name || ' ' || f.last_name AS faculty_name,
+       f.designation, d.department_name,
+       c.course_code, c.course_name, c.credits,
+       fc.academic_year, fc.semester_type
+FROM faculty f
+JOIN department d ON f.department_id = d.department_id
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+JOIN course c ON fc.course_id = c.course_id
+ORDER BY d.department_name, faculty_name;"""
+
+    # 7. hostel vacancy
+    if not sql and ("hostel" in p or "room" in p):
+        sql = """SELECT h.hostel_name, hr.room_number, hr.floor_number, hr.capacity,
+       hr.current_occupancy, (hr.capacity - hr.current_occupancy) AS available_beds
+FROM hostel h
+JOIN hostel_room hr ON h.hostel_id = hr.hostel_id
+WHERE hr.current_occupancy < hr.capacity
+ORDER BY available_beds DESC;"""
+
+    # 8. toppers
+    if not sql and "topper" in p:
+        sql = """WITH ranked_scores AS (
+    SELECT c.course_code, c.course_name, s.roll_number,
+           s.first_name || ' ' || s.last_name AS student_name,
+           m.marks_obtained,
+           DENSE_RANK() OVER (PARTITION BY c.course_id ORDER BY m.marks_obtained DESC) AS course_rank
+    FROM marks m
+    JOIN examination e ON m.exam_id = e.exam_id
+    JOIN course c ON e.course_id = c.course_id
+    JOIN student s ON m.student_id = s.student_id
+)
+SELECT course_code, course_name, roll_number, student_name, marks_obtained AS topper_marks
+FROM ranked_scores
+WHERE course_rank = 1;"""
+
+    if not sql:
+        return err("Could not translate command. Try: 'faculty > 4 courses', 'faculty > 4 students', 'students cgpa > 8.5', 'attendance < 75'")
+
+    return ok(sql=sql, prompt=prompt)
+
 if __name__ == "__main__":
     print("="*55)
     print("  CampusOS  →  http://127.0.0.1:5000")

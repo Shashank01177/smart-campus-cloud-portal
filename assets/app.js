@@ -975,16 +975,36 @@ async function renderReports(c) {
    ══════════════════════════════════════════════════════════ */
 async function renderSQL(c) {
   c.innerHTML = welcomeBar("ADMIN / SQL CONSOLE","Live SQL console",
-    "Query the PostgreSQL 18 university_digital_twin database")
-  + panel("Execute SQL","SELECT queries · DDL is blocked for safety",`
+    "Query the PostgreSQL 18 university_digital_twin database with AI Inline Commander")
+  + panel("Execute SQL","SELECT queries · AI Natural Language Translation · DDL is blocked for safety",`
     <div style="padding:15px 20px">
-      <textarea id="sqlInput" class="sql-input" rows="5"
-        style="width:100%;font-family:monospace;font-size:13px;resize:vertical;box-sizing:border-box"
-        placeholder="SELECT s.first_name, s.last_name, d.department_name
-FROM student s
-JOIN department d ON s.department_id = d.department_id
-LIMIT 10"></textarea>
-      <div style="display:flex;gap:10px;margin-top:10px;align-items:center;flex-wrap:wrap">
+      <div style="position:relative;margin-bottom:8px">
+        <textarea id="sqlInput" class="sql-input" rows="5"
+          style="width:100%;font-family:monospace;font-size:13px;resize:vertical;box-sizing:border-box;padding-right:125px"
+          onkeydown="handleSQLKeyDown(event)"
+          placeholder="Type SQL or AI shorthand (e.g. 'faculty > 4 courses', 'faculty > 4 students', 'attendance < 75%') and press Enter or click ✨ AI Convert"></textarea>
+        <button id="aiTranslateBtn" type="button"
+          title="Convert shorthand to SQL (Press Enter)"
+          onclick="translateToSQL()"
+          style="position:absolute;top:10px;right:14px;background:rgba(99,102,241,0.18);color:#818cf8;border:1px solid rgba(99,102,241,0.35);padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;opacity:0.75;transition:all 0.2s;"
+          onmouseover="this.style.opacity='1';this.style.background='rgba(99,102,241,0.32)';"
+          onmouseout="this.style.opacity='0.75';this.style.background='rgba(99,102,241,0.18)';">
+          <span>✨ AI Convert</span>
+          <span style="font-size:10px;background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px">Enter ↵</span>
+        </button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;font-size:11px;color:#8792a3;flex-wrap:wrap">
+        <span style="font-weight:600;color:#818cf8">⚡ AI Commander Prompts:</span>
+        <button type="button" class="ai-chip" onclick="setAndTranslate('faculty > 4 courses')">faculty &gt; 4 courses</button>
+        <button type="button" class="ai-chip" onclick="setAndTranslate('faculty > 4 students')">faculty &gt; 4 students</button>
+        <button type="button" class="ai-chip" onclick="setAndTranslate('attendance < 75')">attendance &lt; 75%</button>
+        <button type="button" class="ai-chip" onclick="setAndTranslate('students cgpa > 8.5')">students cgpa &gt; 8.5</button>
+        <button type="button" class="ai-chip" onclick="setAndTranslate('fee pending > 50000')">fee pending &gt; 50k</button>
+        <button type="button" class="ai-chip" onclick="setAndTranslate('hostel vacancy')">hostel vacancy</button>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:6px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-bright" style="padding:10px 24px" onclick="execSQL()">Run query ↗</button>
         <select id="sqlPresets" class="sql-input" style="flex:1;min-width:200px"
           onchange="document.getElementById('sqlInput').value=this.value;this.value=''">
@@ -1002,6 +1022,182 @@ LIMIT 10"></textarea>
     </div>
     <div id="sqlResult" style="padding:0 20px 20px"></div>
   `);
+}
+
+function handleSQLKeyDown(e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    const val = ($("#sqlInput")||{}).value?.trim() || "";
+    const isStandardSQL = /^\s*(SELECT|WITH|INSERT|UPDATE|DELETE|EXPLAIN|CREATE)\b/i.test(val);
+    if (!isStandardSQL && val.length > 2) {
+      e.preventDefault();
+      translateToSQL();
+    }
+  }
+}
+
+function setAndTranslate(cmd) {
+  const el = $("#sqlInput");
+  if (!el) return;
+  el.value = cmd;
+  translateToSQL();
+}
+
+async function translateToSQL() {
+  const el = $("#sqlInput");
+  if (!el) return;
+  const prompt = el.value.trim();
+  if (!prompt) {
+    toast("Type an AI command like 'faculty > 4 courses' or 'faculty > 4 students'");
+    return;
+  }
+
+  const p = prompt.toLowerCase();
+  let sql = null;
+
+  // 1. faculty > X courses
+  let m = p.match(/faculty\s*(>|<|>=|<=|=)\s*(\d+)\s*(?:courses?|subjects?)?/);
+  if (m && (p.includes("course") || p.includes("subject") || (!p.includes("student") && m[2]))) {
+    const op = m[1], num = m[2];
+    sql = `SELECT f.faculty_id, f.first_name || ' ' || f.last_name AS faculty_name,
+       f.designation, d.department_name,
+       COUNT(fc.course_id) AS total_courses_taught
+FROM faculty f
+JOIN department d ON f.department_id = d.department_id
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+GROUP BY f.faculty_id, f.first_name, f.last_name, f.designation, d.department_name
+HAVING COUNT(fc.course_id) ${op} ${num}
+ORDER BY total_courses_taught DESC;`;
+  }
+
+  // 2. faculty > X students
+  if (!sql || p.includes("student")) {
+    let m2 = p.match(/faculty\s*(>|<|>=|<=|=)\s*(\d+)\s*students?/);
+    if (m2) {
+      const op = m2[1], num = m2[2];
+      sql = `SELECT f.faculty_id, f.first_name || ' ' || f.last_name AS faculty_name,
+       f.designation, d.department_name,
+       COUNT(DISTINCT sce.student_id) AS total_students_taught
+FROM faculty f
+JOIN department d ON f.department_id = d.department_id
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+JOIN student_course_enrollment sce ON fc.course_id = sce.course_id
+GROUP BY f.faculty_id, f.first_name, f.last_name, f.designation, d.department_name
+HAVING COUNT(DISTINCT sce.student_id) ${op} ${num}
+ORDER BY total_students_taught DESC;`;
+    }
+  }
+
+  // 3. students cgpa > X
+  if (!sql) {
+    let m3 = p.match(/(?:students?.*)?cgpa\s*(>|<|>=|<=|=)\s*(\d+(?:\.\d+)?)/) || p.match(/students?\s*(>|<|>=|<=|=)\s*(\d+(?:\.\d+)?)\s*cgpa/);
+    if (m3) {
+      const op = m3[1], val = m3[2];
+      sql = `SELECT roll_number, first_name || ' ' || last_name AS student_name,
+       current_semester, cgpa, status
+FROM student
+WHERE cgpa ${op} ${val} AND status = 'Active'
+ORDER BY cgpa DESC;`;
+    }
+  }
+
+  // 4. attendance < X
+  if (!sql) {
+    let m4 = p.match(/attendance\s*(>|<|>=|<=|=)\s*(\d+)%?/);
+    if (m4) {
+      const op = m4[1], val = m4[2];
+      sql = `SELECT s.roll_number, s.first_name || ' ' || s.last_name AS student_name,
+       c.course_code, c.course_name,
+       COUNT(a.attendance_id) AS total_lectures,
+       SUM(CASE WHEN a.status IN ('Present', 'On Duty') THEN 1 ELSE 0 END) AS attended_lectures,
+       ROUND(100.0 * SUM(CASE WHEN a.status IN ('Present', 'On Duty') THEN 1 ELSE 0 END) / COUNT(a.attendance_id), 2) AS attendance_pct
+FROM student s
+JOIN attendance a ON s.student_id = a.student_id
+JOIN course c ON a.course_id = c.course_id
+GROUP BY s.student_id, s.roll_number, s.first_name, s.last_name, c.course_code, c.course_name
+HAVING (100.0 * SUM(CASE WHEN a.status IN ('Present', 'On Duty') THEN 1 ELSE 0 END) / COUNT(a.attendance_id)) ${op} ${val}
+ORDER BY attendance_pct ASC;`;
+    }
+  }
+
+  // 5. fee pending > X
+  if (!sql) {
+    let m5 = p.match(/fee(?:s)?.*?(>|<|>=|<=|=)\s*(\d+)/);
+    if (m5) {
+      const op = m5[1], val = m5[2];
+      sql = `SELECT s.roll_number, s.first_name || ' ' || s.last_name AS student_name,
+       d.department_name, SUM(f.amount) AS total_pending_due
+FROM student s
+JOIN department d ON s.department_id = d.department_id
+JOIN fee f ON s.student_id = f.student_id
+WHERE f.payment_status IN ('Pending', 'Overdue')
+GROUP BY s.roll_number, student_name, d.department_name
+HAVING SUM(f.amount) ${op} ${val}
+ORDER BY total_pending_due DESC;`;
+    }
+  }
+
+  // 6. faculty courses list
+  if (!sql && (p.includes("faculty") && (p.includes("course") || p.includes("subject") || p.includes("teach")))) {
+    sql = `SELECT f.first_name || ' ' || f.last_name AS faculty_name,
+       f.designation, d.department_name,
+       c.course_code, c.course_name, c.credits,
+       fc.academic_year, fc.semester_type
+FROM faculty f
+JOIN department d ON f.department_id = d.department_id
+JOIN faculty_course fc ON f.faculty_id = fc.faculty_id
+JOIN course c ON fc.course_id = c.course_id
+ORDER BY d.department_name, faculty_name;`;
+  }
+
+  // 7. hostel vacancy
+  if (!sql && (p.includes("hostel") || p.includes("room"))) {
+    sql = `SELECT h.hostel_name, hr.room_number, hr.floor_number, hr.capacity,
+       hr.current_occupancy, (hr.capacity - hr.current_occupancy) AS available_beds
+FROM hostel h
+JOIN hostel_room hr ON h.hostel_id = hr.hostel_id
+WHERE hr.current_occupancy < hr.capacity
+ORDER BY available_beds DESC;`;
+  }
+
+  // 8. topper
+  if (!sql && p.includes("topper")) {
+    sql = `WITH ranked_scores AS (
+    SELECT c.course_code, c.course_name, s.roll_number,
+           s.first_name || ' ' || s.last_name AS student_name,
+           m.marks_obtained,
+           DENSE_RANK() OVER (PARTITION BY c.course_id ORDER BY m.marks_obtained DESC) AS course_rank
+    FROM marks m
+    JOIN examination e ON m.exam_id = e.exam_id
+    JOIN course c ON e.course_id = c.course_id
+    JOIN student s ON m.student_id = s.student_id
+)
+SELECT course_code, course_name, roll_number, student_name, marks_obtained AS topper_marks
+FROM ranked_scores
+WHERE course_rank = 1;`;
+  }
+
+  if (!sql) {
+    try {
+      const resp = await api("/api/ai/sql-translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt })
+      });
+      if (resp && resp.ok && resp.sql) {
+        sql = resp.sql;
+      }
+    } catch (err) {}
+  }
+
+  if (sql) {
+    el.value = sql;
+    el.style.transition = "background-color 0.4s ease";
+    el.style.backgroundColor = "rgba(99, 102, 241, 0.12)";
+    setTimeout(() => { el.style.backgroundColor = ""; }, 600);
+    toast(`✨ AI translated "${prompt}" to SQL!`);
+  } else {
+    toast("Try: 'faculty > 4 courses', 'faculty > 4 students', 'attendance < 75'");
+  }
 }
 
 async function execSQL() {
